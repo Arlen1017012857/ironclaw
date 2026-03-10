@@ -616,4 +616,37 @@ impl WorkspaceStore for LibSqlBackend {
 
         Ok(reciprocal_rank_fusion(fts_results, vector_results, config))
     }
+
+    async fn invalidate_all_embeddings(
+        &self,
+        user_id: &str,
+        agent_id: Option<Uuid>,
+    ) -> Result<u64, WorkspaceError> {
+        let conn = self
+            .connect()
+            .await
+            .map_err(|e| WorkspaceError::EmbeddingFailed {
+                reason: e.to_string(),
+            })?;
+        let agent_id_str = agent_id.map(|id| id.to_string());
+
+        let rows_affected = conn
+            .execute(
+                r#"
+                UPDATE memory_chunks SET embedding = NULL
+                WHERE document_id IN (
+                    SELECT id FROM memory_documents
+                    WHERE user_id = ?1 AND agent_id IS ?2
+                )
+                AND embedding IS NOT NULL
+                "#,
+                params![user_id, agent_id_str.as_deref()],
+            )
+            .await
+            .map_err(|e| WorkspaceError::EmbeddingFailed {
+                reason: format!("Invalidate embeddings failed: {}", e),
+            })?;
+
+        Ok(rows_affected as u64)
+    }
 }

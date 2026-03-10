@@ -697,4 +697,14 @@ impl WorkspaceStore for PgBackend {
             .hybrid_search(user_id, agent_id, query, embedding, config)
             .await
     }
+
+    async fn invalidate_all_embeddings(
+        &self,
+        user_id: &str,
+        agent_id: Option<Uuid>,
+    ) -> Result<u64, WorkspaceError> {
+        self.repo
+            .invalidate_all_embeddings(user_id, agent_id)
+            .await
+    }
 }

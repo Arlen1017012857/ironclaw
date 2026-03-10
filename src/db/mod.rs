@@ -503,6 +503,17 @@ pub trait WorkspaceStore: Send + Sync {
         embedding: Option<&[f32]>,
         config: &SearchConfig,
     ) -> Result<Vec<SearchResult>, WorkspaceError>;
+
+    /// Set all chunk embeddings to NULL for a user's workspace.
+    ///
+    /// Used when the embedding model changes — old vectors are incompatible
+    /// (different dimension or semantic space). After invalidation,
+    /// `backfill_embeddings` will regenerate them with the new model.
+    async fn invalidate_all_embeddings(
+        &self,
+        user_id: &str,
+        agent_id: Option<Uuid>,
+    ) -> Result<u64, WorkspaceError>;
 }
 
 /// Backend-agnostic database supertrait.

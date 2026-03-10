@@ -244,6 +244,22 @@ impl WorkspaceStorage {
             }
         }
     }
+
+    async fn invalidate_all_embeddings(
+        &self,
+        user_id: &str,
+        agent_id: Option<Uuid>,
+    ) -> Result<u64, WorkspaceError> {
+        match self {
+            #[cfg(feature = "postgres")]
+            Self::Repo(repo) => {
+                repo.invalidate_all_embeddings(user_id, agent_id).await
+            }
+            Self::Db(db) => {
+                db.invalidate_all_embeddings(user_id, agent_id).await
+            }
+        }
+    }
 }
 
 /// Default template seeded into HEARTBEAT.md on first access.
@@ -1050,6 +1066,33 @@ impl Workspace {
         }
 
         Ok(count)
+    }
+
+    /// Invalidate all embeddings and regenerate them.
+    ///
+    /// Call this when the embedding model changes — old vectors are
+    /// incompatible (different dimension or semantic space). Sets all
+    /// existing embeddings to NULL, then backfills with the current provider.
+    ///
+    /// Returns the number of chunks re-embedded.
+    pub async fn reindex_embeddings(&self) -> Result<usize, WorkspaceError> {
+        let Some(ref _provider) = self.embeddings else {
+            return Ok(0);
+        };
+
+        let invalidated = self
+            .storage
+            .invalidate_all_embeddings(&self.user_id, self.agent_id)
+            .await?;
+
+        if invalidated > 0 {
+            tracing::info!(
+                "Invalidated {} chunk embeddings due to model change, re-embedding...",
+                invalidated
+            );
+        }
+
+        self.backfill_embeddings().await
     }
 }
 

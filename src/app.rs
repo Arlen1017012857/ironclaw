@@ -714,10 +714,59 @@ impl AppBuilder {
 
             if embeddings.is_some() {
                 let ws_bg = Arc::clone(ws);
+                let emb_model = self.config.embeddings.model.clone();
+                let emb_dimension = self.config.embeddings.dimension;
+                let db_bg = self.db.clone();
                 tokio::spawn(async move {
-                    match ws_bg.backfill_embeddings().await {
+                    // Detect embedding model change and reindex if needed.
+                    let model_key = format!("{}:{}", emb_model, emb_dimension);
+                    let mut model_changed = false;
+
+                    if let Some(ref db) = db_bg {
+                        let prev = db
+                            .get_setting("_system", "embedding_model")
+                            .await
+                            .ok()
+                            .flatten()
+                            .and_then(|v| v.as_str().map(String::from));
+
+                        if let Some(ref prev_key) = prev {
+                            if prev_key != &model_key {
+                                tracing::info!(
+                                    "Embedding model changed ({} -> {}), reindexing...",
+                                    prev_key,
+                                    model_key
+                                );
+                                model_changed = true;
+                            }
+                        }
+
+                        // Persist current model signature
+                        if let Err(e) = db
+                            .set_setting(
+                                "_system",
+                                "embedding_model",
+                                &serde_json::Value::String(model_key),
+                            )
+                            .await
+                        {
+                            tracing::warn!("Failed to persist embedding model key: {}", e);
+                        }
+                    }
+
+                    let result = if model_changed {
+                        ws_bg.reindex_embeddings().await
+                    } else {
+                        ws_bg.backfill_embeddings().await
+                    };
+
+                    match result {
                         Ok(count) if count > 0 => {
-                            tracing::debug!("Backfilled embeddings for {} chunks", count);
+                            if model_changed {
+                                tracing::info!("Re-embedded {} chunks after model change", count);
+                            } else {
+                                tracing::debug!("Backfilled embeddings for {} chunks", count);
+                            }
                         }
                         Ok(_) => {}
                         Err(e) => {

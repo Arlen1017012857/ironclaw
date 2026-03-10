@@ -502,4 +502,32 @@ impl Repository {
             })
             .collect())
     }
+
+    /// Set all chunk embeddings to NULL for a user's workspace.
+    pub async fn invalidate_all_embeddings(
+        &self,
+        user_id: &str,
+        agent_id: Option<Uuid>,
+    ) -> Result<u64, WorkspaceError> {
+        let conn = self.conn().await?;
+
+        let rows_affected = conn
+            .execute(
+                r#"
+                UPDATE memory_chunks SET embedding = NULL
+                WHERE document_id IN (
+                    SELECT id FROM memory_documents
+                    WHERE user_id = $1 AND agent_id IS NOT DISTINCT FROM $2
+                )
+                AND embedding IS NOT NULL
+                "#,
+                &[&user_id, &agent_id],
+            )
+            .await
+            .map_err(|e| WorkspaceError::EmbeddingFailed {
+                reason: format!("Invalidate embeddings failed: {}", e),
+            })?;
+
+        Ok(rows_affected)
+    }
 }

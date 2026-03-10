@@ -60,7 +60,11 @@ fn default_dimension_for_model(model: &str) -> usize {
 
 impl EmbeddingsConfig {
     pub(crate) fn resolve(settings: &Settings) -> Result<Self, ConfigError> {
-        let openai_api_key = optional_env("OPENAI_API_KEY")?.map(SecretString::from);
+        // EMBEDDING_API_KEY takes priority (for OpenAI-compatible endpoints),
+        // falls back to OPENAI_API_KEY for backward compatibility.
+        let openai_api_key = optional_env("EMBEDDING_API_KEY")?
+            .or(optional_env("OPENAI_API_KEY")?)
+            .map(SecretString::from);
 
         let provider = optional_env("EMBEDDING_PROVIDER")?
             .unwrap_or_else(|| settings.embeddings.provider.clone());
@@ -95,6 +99,11 @@ impl EmbeddingsConfig {
     /// Get the OpenAI API key if configured.
     pub fn openai_api_key(&self) -> Option<&str> {
         self.openai_api_key.as_ref().map(|s| s.expose_secret())
+    }
+
+    /// Whether the OpenAI base URL points to a non-default (compatible) endpoint.
+    fn is_custom_openai_endpoint(&self) -> bool {
+        self.openai_base_url != "https://api.openai.com/v1"
     }
 
     /// Create the appropriate embedding provider based on configuration.
@@ -137,25 +146,35 @@ impl EmbeddingsConfig {
                 ))
             }
             _ => {
-                if let Some(api_key) = self.openai_api_key() {
-                    tracing::debug!(
-                        "Embeddings enabled via OpenAI (model: {}, url: {}, dim: {})",
-                        self.model,
-                        self.openai_base_url,
-                        self.dimension,
+                // For OpenAI-compatible endpoints with a custom base URL,
+                // an API key is optional (many local servers don't need one).
+                let api_key = self.openai_api_key().unwrap_or("");
+
+                if api_key.is_empty() && !self.is_custom_openai_endpoint() {
+                    tracing::warn!(
+                        "Embeddings provider is '{}' but OPENAI_API_KEY not set. \
+                         Set OPENAI_API_KEY or switch to a different provider \
+                         (EMBEDDING_PROVIDER=ollama/nearai).",
+                        self.provider,
                     );
-                    Some(Arc::new(
-                        crate::workspace::OpenAiEmbeddings::with_model(
-                            api_key,
-                            &self.model,
-                            self.dimension,
-                        )
-                        .with_base_url(&self.openai_base_url),
-                    ))
-                } else {
-                    tracing::warn!("Embeddings configured but OPENAI_API_KEY not set");
-                    None
+                    return None;
                 }
+
+                tracing::debug!(
+                    "Embeddings enabled via {} (model: {}, url: {}, dim: {})",
+                    if self.is_custom_openai_endpoint() { "OpenAI-compatible" } else { "OpenAI" },
+                    self.model,
+                    self.openai_base_url,
+                    self.dimension,
+                );
+                Some(Arc::new(
+                    crate::workspace::OpenAiEmbeddings::with_model(
+                        api_key,
+                        &self.model,
+                        self.dimension,
+                    )
+                    .with_base_url(&self.openai_base_url),
+                ))
             }
         }
     }
@@ -174,6 +193,9 @@ mod tests {
             std::env::remove_var("EMBEDDING_ENABLED");
             std::env::remove_var("EMBEDDING_PROVIDER");
             std::env::remove_var("EMBEDDING_MODEL");
+            std::env::remove_var("EMBEDDING_API_KEY");
+            std::env::remove_var("EMBEDDING_BASE_URL");
+            std::env::remove_var("EMBEDDING_DIMENSION");
             std::env::remove_var("OPENAI_API_KEY");
         }
     }

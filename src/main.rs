@@ -507,7 +507,13 @@ async fn async_main() -> anyhow::Result<()> {
             gateway_url,
             embeddings_enabled: config.embeddings.enabled,
             embeddings_provider: if config.embeddings.enabled {
-                Some(config.embeddings.provider.clone())
+                if config.embeddings.provider == "openai"
+                    && config.embeddings.openai_base_url != "https://api.openai.com/v1"
+                {
+                    Some("openai-compatible".to_string())
+                } else {
+                    Some(config.embeddings.provider.clone())
+                }
             } else {
                 None
             },

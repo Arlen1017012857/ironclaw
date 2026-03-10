@@ -95,6 +95,8 @@ pub struct SetupWizard {
     secrets_crypto: Option<Arc<SecretsCrypto>>,
     /// Cached API key from provider setup (used by model fetcher without env mutation).
     llm_api_key: Option<SecretString>,
+    /// Cached API key for embedding endpoint (written to .env as EMBEDDING_API_KEY).
+    embedding_api_key: Option<SecretString>,
 }
 
 impl SetupWizard {
@@ -110,6 +112,7 @@ impl SetupWizard {
             db_backend: None,
             secrets_crypto: None,
             llm_api_key: None,
+            embedding_api_key: None,
         }
     }
 
@@ -125,6 +128,7 @@ impl SetupWizard {
             db_backend: None,
             secrets_crypto: None,
             llm_api_key: None,
+            embedding_api_key: None,
         }
     }
 
@@ -1902,10 +1906,15 @@ impl SetupWizard {
                     .unwrap_or_else(|| default_model.to_string());
                 self.settings.embeddings.model = model;
 
-                if !has_openai_key {
-                    print_info(
-                        "If this endpoint requires an API key, set OPENAI_API_KEY in your .env file.",
-                    );
+                // Prompt for API key if the endpoint needs one
+                if confirm("Does this endpoint require an API key?", true)
+                    .map_err(SetupError::Io)?
+                {
+                    let key = secret_input("Embedding API key").map_err(SetupError::Io)?;
+                    if !key.expose_secret().is_empty() {
+                        self.embedding_api_key = Some(key);
+                        print_success("API key saved (will be written to .env as EMBEDDING_API_KEY)");
+                    }
                 }
 
                 let display_url = self
@@ -2713,6 +2722,9 @@ impl SetupWizard {
         // before the DB is connected so Config::from_env() can resolve it.
         if let Some(ref url) = self.settings.embeddings.base_url {
             env_vars.push(("EMBEDDING_BASE_URL".to_string(), url.clone()));
+        }
+        if let Some(ref key) = self.embedding_api_key {
+            env_vars.push(("EMBEDDING_API_KEY".to_string(), key.expose_secret().to_string()));
         }
 
         // Secrets master key (env var mode): write to .env so it's available

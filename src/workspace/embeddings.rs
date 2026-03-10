@@ -61,12 +61,20 @@ pub trait EmbeddingProvider: Send + Sync {
 }
 
 /// OpenAI embedding provider using text-embedding-ada-002 or text-embedding-3-small.
+/// OpenAI embedding provider using text-embedding-ada-002 or text-embedding-3-small.
+///
+/// Supports any OpenAI-compatible embedding endpoint (e.g. LiteLLM, vLLM,
+/// LocalAI, Azure OpenAI) via a configurable base URL.
 pub struct OpenAiEmbeddings {
     client: reqwest::Client,
     api_key: String,
+    base_url: String,
     model: String,
     dimension: usize,
 }
+
+/// Default OpenAI API base URL.
+const OPENAI_DEFAULT_BASE_URL: &str = "https://api.openai.com/v1";
 
 impl OpenAiEmbeddings {
     /// Create a new OpenAI embedding provider with the default model.
@@ -76,6 +84,7 @@ impl OpenAiEmbeddings {
         Self {
             client: reqwest::Client::new(),
             api_key: api_key.into(),
+            base_url: OPENAI_DEFAULT_BASE_URL.to_string(),
             model: "text-embedding-3-small".to_string(),
             dimension: 1536,
         }
@@ -86,6 +95,7 @@ impl OpenAiEmbeddings {
         Self {
             client: reqwest::Client::new(),
             api_key: api_key.into(),
+            base_url: OPENAI_DEFAULT_BASE_URL.to_string(),
             model: "text-embedding-ada-002".to_string(),
             dimension: 1536,
         }
@@ -96,6 +106,7 @@ impl OpenAiEmbeddings {
         Self {
             client: reqwest::Client::new(),
             api_key: api_key.into(),
+            base_url: OPENAI_DEFAULT_BASE_URL.to_string(),
             model: "text-embedding-3-large".to_string(),
             dimension: 3072,
         }
@@ -110,9 +121,19 @@ impl OpenAiEmbeddings {
         Self {
             client: reqwest::Client::new(),
             api_key: api_key.into(),
+            base_url: OPENAI_DEFAULT_BASE_URL.to_string(),
             model: model.into(),
             dimension,
         }
+    }
+
+    /// Override the base URL for OpenAI-compatible endpoints.
+    ///
+    /// The URL should be the base (e.g. `http://localhost:8000/v1`);
+    /// `/embeddings` is appended automatically.
+    pub fn with_base_url(mut self, base_url: impl Into<String>) -> Self {
+        self.base_url = base_url.into().trim_end_matches('/').to_string();
+        self
     }
 }
 
@@ -173,9 +194,11 @@ impl EmbeddingProvider for OpenAiEmbeddings {
             input: texts,
         };
 
+        let url = format!("{}/embeddings", self.base_url);
+
         let response = self
             .client
-            .post("https://api.openai.com/v1/embeddings")
+            .post(&url)
             .header("Authorization", format!("Bearer {}", self.api_key))
             .json(&request)
             .send()

@@ -342,9 +342,9 @@ This document tracks feature parity between IronClaw (Rust implementation) and O
 | Temporal decay (hybrid search) | ✅ | ❌ | Opt-in time-based scoring factor |
 | MMR re-ranking | ✅ | ❌ | Maximal marginal relevance for result diversity |
 | LLM-based query expansion | ✅ | ❌ | Expand FTS queries via LLM |
-| OpenAI embeddings | ✅ | ✅ | |
+| OpenAI embeddings | ✅ | ✅ | Supports any OpenAI-compatible endpoint via `EMBEDDING_BASE_URL` |
 | Gemini embeddings | ✅ | ❌ | |
-| Local embeddings | ✅ | ❌ | |
+| Local embeddings | ✅ | ✅ | Ollama provider + OpenAI-compatible (vLLM, LocalAI, LM Studio) |
 | SQLite-vec backend | ✅ | ❌ | IronClaw uses PostgreSQL |
 | LanceDB backend | ✅ | ❌ | Configurable auto-capture max length |
 | QMD backend | ✅ | ❌ | |

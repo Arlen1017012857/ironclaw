@@ -17,6 +17,8 @@ pub struct EmbeddingsConfig {
     pub provider: String,
     /// OpenAI API key (for OpenAI provider).
     pub openai_api_key: Option<SecretString>,
+    /// OpenAI-compatible base URL (for OpenAI provider). Defaults to https://api.openai.com/v1.
+    pub openai_base_url: String,
     /// Model to use for embeddings.
     pub model: String,
     /// Ollama base URL (for Ollama provider). Defaults to http://localhost:11434.
@@ -33,6 +35,7 @@ impl Default for EmbeddingsConfig {
             enabled: false,
             provider: "openai".to_string(),
             openai_api_key: None,
+            openai_base_url: "https://api.openai.com/v1".to_string(),
             model,
             ollama_base_url: "http://localhost:11434".to_string(),
             dimension,
@@ -69,6 +72,10 @@ impl EmbeddingsConfig {
             .or_else(|| settings.ollama_base_url.clone())
             .unwrap_or_else(|| "http://localhost:11434".to_string());
 
+        let openai_base_url = optional_env("EMBEDDING_BASE_URL")?
+            .or_else(|| settings.embeddings.base_url.clone())
+            .unwrap_or_else(|| "https://api.openai.com/v1".to_string());
+
         let dimension =
             parse_optional_env("EMBEDDING_DIMENSION", default_dimension_for_model(&model))?;
 
@@ -78,6 +85,7 @@ impl EmbeddingsConfig {
             enabled,
             provider,
             openai_api_key,
+            openai_base_url,
             model,
             ollama_base_url,
             dimension,
@@ -131,15 +139,19 @@ impl EmbeddingsConfig {
             _ => {
                 if let Some(api_key) = self.openai_api_key() {
                     tracing::debug!(
-                        "Embeddings enabled via OpenAI (model: {}, dim: {})",
+                        "Embeddings enabled via OpenAI (model: {}, url: {}, dim: {})",
                         self.model,
+                        self.openai_base_url,
                         self.dimension,
                     );
-                    Some(Arc::new(crate::workspace::OpenAiEmbeddings::with_model(
-                        api_key,
-                        &self.model,
-                        self.dimension,
-                    )))
+                    Some(Arc::new(
+                        crate::workspace::OpenAiEmbeddings::with_model(
+                            api_key,
+                            &self.model,
+                            self.dimension,
+                        )
+                        .with_base_url(&self.openai_base_url),
+                    ))
                 } else {
                     tracing::warn!("Embeddings configured but OPENAI_API_KEY not set");
                     None

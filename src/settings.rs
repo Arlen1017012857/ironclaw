@@ -148,6 +148,10 @@ pub struct EmbeddingsSettings {
     /// Model to use for embeddings.
     #[serde(default = "default_embeddings_model")]
     pub model: String,
+
+    /// OpenAI-compatible base URL (e.g. for LiteLLM, vLLM, LocalAI).
+    #[serde(default)]
+    pub base_url: Option<String>,
 }
 
 fn default_embeddings_provider() -> String {
@@ -164,6 +168,7 @@ impl Default for EmbeddingsSettings {
             enabled: false,
             provider: default_embeddings_provider(),
             model: default_embeddings_model(),
+            base_url: None,
         }
     }
 }
@@ -1493,6 +1498,7 @@ mod tests {
                 enabled: true,
                 provider: "nearai".to_string(),
                 model: "text-embedding-3-large".to_string(),
+                base_url: None,
             },
             tunnel: TunnelSettings {
                 provider: Some("ngrok".to_string()),

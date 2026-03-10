@@ -31,7 +31,7 @@ use crate::setup::channels::{
 };
 use crate::setup::prompts::{
     confirm, input, optional_input, print_error, print_header, print_info, print_step,
-    print_success, secret_input, select_many, select_one,
+    print_success, print_warning, secret_input, select_many, select_one,
 };
 
 // unused const, keep commented for clarity / future use
@@ -1787,54 +1787,144 @@ impl SetupWizard {
         let has_openai_key = std::env::var("OPENAI_API_KEY").is_ok()
             || (backend == "openai" && self.llm_api_key.is_some());
         let has_nearai = backend == "nearai" || self.session_manager.is_some();
+        let has_ollama = backend == "ollama"
+            || self.settings.ollama_base_url.is_some()
+            || std::env::var("OLLAMA_BASE_URL").is_ok();
 
-        // If the LLM backend is OpenAI and we already have a key, default to OpenAI embeddings
+        // If the LLM backend is OpenAI and we already have a key, skip the
+        // menu and auto-select OpenAI embeddings (same key, no extra config).
         if backend == "openai" && has_openai_key {
             self.settings.embeddings.enabled = true;
             self.settings.embeddings.provider = "openai".to_string();
             self.settings.embeddings.model = "text-embedding-3-small".to_string();
+            self.settings.embeddings.base_url = None;
             print_success("Embeddings enabled via OpenAI (using existing API key)");
             return Ok(());
         }
 
-        // If no NEAR AI session and no OpenAI key, only OpenAI is viable
-        if !has_nearai && !has_openai_key {
-            print_info("No NEAR AI session or OpenAI key found for embeddings.");
-            print_info("Set OPENAI_API_KEY in your environment to enable embeddings.");
-            self.settings.embeddings.enabled = false;
-            return Ok(());
-        }
-
-        let mut options = Vec::new();
+        // Build provider options dynamically based on what's available
+        let mut options: Vec<(&str, &str)> = Vec::new();
         if has_nearai {
-            options.push("NEAR AI (uses same auth, no extra cost)");
+            options.push(("nearai", "NEAR AI (uses same auth, no extra cost)"));
         }
-        options.push("OpenAI (requires API key)");
+        if has_openai_key {
+            options.push(("openai", "OpenAI (using existing API key)"));
+        }
+        if has_ollama {
+            options.push(("ollama", "Ollama (local)"));
+        }
+        options.push((
+            "openai_compatible",
+            "OpenAI-compatible endpoint (vLLM, LiteLLM, LocalAI, LM Studio, etc.)",
+        ));
+        if !has_openai_key {
+            options.push(("openai", "OpenAI (requires API key)"));
+        }
 
-        let choice = select_one("Select embeddings provider:", &options).map_err(SetupError::Io)?;
+        let labels: Vec<&str> = options.iter().map(|(_, label)| *label).collect();
+        let choice = select_one("Select embeddings provider:", &labels).map_err(SetupError::Io)?;
+        let provider = options[choice].0;
 
-        // Map choice back to provider name
-        let provider = if has_nearai && choice == 0 {
-            "nearai"
-        } else {
-            "openai"
-        };
+        self.settings.embeddings.enabled = true;
 
         match provider {
             "nearai" => {
-                self.settings.embeddings.enabled = true;
                 self.settings.embeddings.provider = "nearai".to_string();
                 self.settings.embeddings.model = "text-embedding-3-small".to_string();
+                self.settings.embeddings.base_url = None;
                 print_success("Embeddings enabled via NEAR AI");
             }
+            "ollama" => {
+                self.settings.embeddings.provider = "ollama".to_string();
+
+                let default_model = "nomic-embed-text";
+                let model_input = optional_input(
+                    "Embedding model",
+                    Some(&format!("default: {default_model}")),
+                )
+                .map_err(SetupError::Io)?;
+                let model = model_input
+                    .filter(|s| !s.is_empty())
+                    .unwrap_or_else(|| default_model.to_string());
+                self.settings.embeddings.model = model.clone();
+                self.settings.embeddings.base_url = None;
+
+                print_success(&format!("Embeddings enabled via Ollama (model: {model})"));
+            }
+            "openai_compatible" => {
+                // Use the "openai" provider with a custom base URL
+                self.settings.embeddings.provider = "openai".to_string();
+
+                let existing_url = self
+                    .settings
+                    .embeddings
+                    .base_url
+                    .clone()
+                    .or_else(|| std::env::var("EMBEDDING_BASE_URL").ok())
+                    // Offer the LLM base URL as a starting point if using an
+                    // OpenAI-compatible LLM backend
+                    .or_else(|| {
+                        if backend == "openai_compatible" {
+                            self.settings
+                                .openai_compatible_base_url
+                                .clone()
+                                .or_else(|| std::env::var("LLM_BASE_URL").ok())
+                        } else {
+                            None
+                        }
+                    });
+
+                let url = if let Some(ref u) = existing_url {
+                    let url_input =
+                        optional_input("Base URL", Some(&format!("current: {u}")))
+                            .map_err(SetupError::Io)?;
+                    url_input.unwrap_or_else(|| u.clone())
+                } else {
+                    input("Base URL (e.g., http://localhost:8000/v1)")
+                        .map_err(SetupError::Io)?
+                };
+
+                if url.is_empty() {
+                    print_warning("Base URL is required. Falling back to OpenAI default.");
+                    self.settings.embeddings.base_url = None;
+                } else {
+                    self.settings.embeddings.base_url = Some(url.clone());
+                }
+
+                let default_model = "text-embedding-3-small";
+                let model_input = optional_input(
+                    "Embedding model",
+                    Some(&format!("default: {default_model}")),
+                )
+                .map_err(SetupError::Io)?;
+                let model = model_input
+                    .filter(|s| !s.is_empty())
+                    .unwrap_or_else(|| default_model.to_string());
+                self.settings.embeddings.model = model;
+
+                if !has_openai_key {
+                    print_info(
+                        "If this endpoint requires an API key, set OPENAI_API_KEY in your .env file.",
+                    );
+                }
+
+                let display_url = self
+                    .settings
+                    .embeddings
+                    .base_url
+                    .as_deref()
+                    .unwrap_or("https://api.openai.com/v1");
+                print_success(&format!("Embeddings configured ({display_url})"));
+            }
             _ => {
+                // "openai" (direct)
+                self.settings.embeddings.provider = "openai".to_string();
+                self.settings.embeddings.model = "text-embedding-3-small".to_string();
+                self.settings.embeddings.base_url = None;
                 if !has_openai_key {
                     print_info("OPENAI_API_KEY not set in environment.");
                     print_info("Add it to your .env file or environment to enable embeddings.");
                 }
-                self.settings.embeddings.enabled = true;
-                self.settings.embeddings.provider = "openai".to_string();
-                self.settings.embeddings.model = "text-embedding-3-small".to_string();
                 print_success("Embeddings configured for OpenAI");
             }
         }
@@ -2619,6 +2709,12 @@ impl SetupWizard {
             env_vars.push(("NEARAI_API_KEY".to_string(), api_key));
         }
 
+        // Embeddings bootstrap vars: EMBEDDING_BASE_URL must be available
+        // before the DB is connected so Config::from_env() can resolve it.
+        if let Some(ref url) = self.settings.embeddings.base_url {
+            env_vars.push(("EMBEDDING_BASE_URL".to_string(), url.clone()));
+        }
+
         // Secrets master key (env var mode): write to .env so it's available
         // on next startup before the DB is connected.
         if let Some(ref key_hex) = self.settings.secrets_master_key_hex {
@@ -2896,10 +2992,17 @@ impl SetupWizard {
         }
 
         if self.settings.embeddings.enabled {
-            println!(
-                "  Embeddings: {} ({})",
-                self.settings.embeddings.provider, self.settings.embeddings.model
-            );
+            if let Some(ref url) = self.settings.embeddings.base_url {
+                println!(
+                    "  Embeddings: {} ({}, {})",
+                    self.settings.embeddings.provider, self.settings.embeddings.model, url
+                );
+            } else {
+                println!(
+                    "  Embeddings: {} ({})",
+                    self.settings.embeddings.provider, self.settings.embeddings.model
+                );
+            }
         } else {
             println!("  Embeddings: disabled");
         }
